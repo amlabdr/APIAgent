@@ -1,0 +1,2 @@
+jsonschema==4.22.0
+python_qpid_proton==0.39.0
