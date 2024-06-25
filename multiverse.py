@@ -1,20 +1,24 @@
-import time
 import random
 import string
 import json
-import hashlib
 import logging
 from datetime import datetime
 from threading import Thread, Event
 from jsonschema import validate, exceptions as jsonschema_exceptions
 from protocols.amqp.receive import Receiver
 from protocols.amqp.send import Sender
-
+from utils.message import Message
+from utils.broker import Broker
 #logging.basicConfig(level=logging.INFO)
 
-class MeasurementPlane:
-    @staticmethod
-    def get_capabilities(capability_type: str = None, broker_url: str = "") -> dict:
+class MeasurementPlaneClient:
+    def __init__(self, broker_url) -> None:
+        self.broker_url = broker_url
+        self.sender = Sender()
+        self.broker = Broker(self.broker_url)
+        self.broker.start()
+
+    def get_capabilities(self, capability_type: str = None) -> dict:
         capabilities_event = Event()
         capabilities = {}
 
@@ -35,11 +39,10 @@ class MeasurementPlane:
         reply_to_topic = 'topic://' + ''.join(random.choices(string.ascii_letters + string.digits, k=10))
 
         capabilities_receiver = Receiver(on_message_callback=capabilities_receiver_on_message_callback)
-        thread_capabilities_receiver = Thread(target=capabilities_receiver.receive_event, args=(broker_url, reply_to_topic))
+        thread_capabilities_receiver = Thread(target=capabilities_receiver.receive_event, args=(self.broker_url, reply_to_topic))
         thread_capabilities_receiver.start()
 
-        sender = Sender()
-        sender.send(broker_url, topic, "", reply_to_topic)
+        self.sender.send(self.broker_url, topic, "", reply_to_topic)
 
         capabilities_event.wait(timeout=2)
         capabilities_receiver.container.stop()
@@ -47,49 +50,35 @@ class MeasurementPlane:
 
         return capabilities if capabilities else {}
 
-    @staticmethod
-    def calculate_capability_id(capability_body: dict) -> str:
-        try:
-            endpoint = capability_body["endpoint"]
-            capability_name = capability_body["capabilityName"]
-            combined_string = MeasurementPlane.combine_to_string([endpoint, capability_name])
-            capability_id = hashlib.sha256(combined_string.encode()).hexdigest()
-            return capability_id
-        except KeyError as e:
-            logging.error(f"KeyError: {e}. Missing required keys in capability_body.")
-            return None
-
-    @staticmethod
-    def combine_to_string(attributes: list) -> str:
+    def combine_to_string(self, attributes: list) -> str:
         return ''.join(str(att).replace(" ", "").replace("\n", "") for att in attributes)
+    
+    def calculate_capability_id(self, message):
+        return Message.calculate_capability_id(message=message)
 
-    @staticmethod
-    def create_measurement(capability: dict) -> 'Measurement':
-        return Measurement(capability)
+    def create_measurement(self, capability: dict) -> 'Measurement':
+        return Measurement(capability, self)
 
-    @staticmethod
-    def send_measurement(measurement: 'Measurement', broker_url: str = ""):
+    def send_measurement(self, measurement: 'Measurement'):
         specification_topic = "topic:///specifications"
-        measurement.broker_url = broker_url
         reply_to_topic = 'topic://' + ''.join(random.choices(string.ascii_letters + string.digits, k=10))
 
         measurement.receipt_receiver = Receiver(on_message_callback=measurement.receipt_receiver_on_message_callback)
-        thread_receipt_receiver = Thread(target=measurement.receipt_receiver.receive_event, args=(measurement.broker_url, reply_to_topic))
+        thread_receipt_receiver = Thread(target=measurement.receipt_receiver.receive_event, args=(self.broker_url, reply_to_topic))
         thread_receipt_receiver.start()
 
-        sender = Sender()
-        sender.send(measurement.broker_url, specification_topic, measurement.specification_message, reply_to_topic)
+        self.sender.send(self.broker_url, specification_topic, measurement.specification_message, reply_to_topic)
 
         thread_receipt_receiver.join(timeout=2)
         measurement.receipt_receiver.container.stop()
 
-    @staticmethod
-    def interrupt_measurement(measurement: 'Measurement'):
+    def interrupt_measurement(self, measurement: 'Measurement'):
         measurement.interrupt()
 
 class Measurement:
-    def __init__(self, capability: dict):
-        self.broker_url = ''
+    def __init__(self, capability: dict, measurement_plane_client: MeasurementPlaneClient):
+        self.measurement_plane_client = measurement_plane_client
+        self.broker_url = self.measurement_plane_client.broker_url
         self.capability = capability
         self.results_receiver = None
         self.results = []
@@ -122,7 +111,7 @@ class Measurement:
                 logging.info("Measurement interrupted.")
             else:
                 if self.results_receiver is None:
-                    measurement_id = Measurement.calculate_measurement_id(receipt_msg)
+                    measurement_id = Message.calculate_measurement_id(message = receipt_msg)
                     self.results_receiver = Receiver(on_message_callback=self.result_receiver_on_message_callback)
                     topic = f'topic://{measurement_id}/results'
                     self.results_receiver.receive_event(self.broker_url, topic)
@@ -140,22 +129,14 @@ class Measurement:
     def interrupt(self):
         interrupt_msg = self.specification_message
         interrupt_msg['capability'] = interrupt_msg['specification']
-        interruption = Measurement(interrupt_msg)
+        interruption = Measurement(interrupt_msg, self.measurement_plane_client)
         interrupt_msg = interruption.specification_message
         interrupt_msg['interrupt'] = interrupt_msg['specification']
         del interrupt_msg['specification']
         interruption.message = interrupt_msg
-        MeasurementPlane.send_measurement(interruption, self.broker_url)
+        self.measurement_plane_client.send_measurement(interruption)
         if self.results_receiver:
             self.results_receiver.container.stop()
-
-    @staticmethod
-    def calculate_measurement_id(message_body: dict) -> str:
-        capability_id = MeasurementPlane.calculate_capability_id(message_body)
-        parameters = message_body["parameters"]
-        schedule = message_body["schedule"]
-        combined_string = MeasurementPlane.combine_to_string([capability_id, parameters, schedule])
-        return hashlib.sha256(combined_string.encode()).hexdigest()
 
     def validate_parameters(self, parameters: dict) -> bool:
         try:

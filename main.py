@@ -1,5 +1,5 @@
 import time
-from multiverse import MeasurementPlane as mp
+from multiverse import MeasurementPlaneClient
 
 def on_result_callback(result):
     print(f"New Result Received: {result}")
@@ -10,14 +10,15 @@ def on_completion_callback(status):
 def main():
     BROKER_URL = "http://129.6.254.164:5672/"
     # Step 1: Get the capabilities published by agents
-    capabilities = mp.get_capabilities(capability_type="measure", broker_url = BROKER_URL)
+    mpClient = MeasurementPlaneClient(BROKER_URL)
+    capabilities = mpClient.get_capabilities(capability_type="measure")
     print("Available Capabilities:", capabilities)
 
     # Step 2: Pick up one capability (by endpoint and name)
     endpoint = "/multiverse/qnet/tt/Alice"  # Replace with an actual agent endpoint
     capability_name = "TimetagsMeasurementAlice"  # Replace with an actual capability name
 
-    capability_id = mp.calculate_capability_id({"endpoint":endpoint, "capabilityName": capability_name})
+    capability_id = mpClient.calculate_capability_id({"endpoint":endpoint, "capabilityName": capability_name})
     if capability_id in capabilities:
         capability = capabilities[capability_id]
     else:
@@ -30,7 +31,7 @@ def main():
     print(f"Selected Capability: {capability}")
 
     # Step 3: Instantiate a specification of a measurement from the capability
-    measurement = mp.create_measurement(capability)
+    measurement = mpClient.create_measurement(capability)
     print(f"Created Measurement: {measurement.specification_message}")
 
     # Step 4: Configure the measurement with parameters
@@ -50,13 +51,13 @@ def main():
     print(f"Configured Measurement Specification: {measurement.specification_message}")
 
     # Step 5: Send the Measurement
-    mp.send_measurement(measurement, BROKER_URL)
+    mpClient.send_measurement(measurement)
 
     # Simulate some wait time for the measurement to finish
     time.sleep(5)  # Wait for 5 seconds (replace with appropriate wait time)
 
     # Step 6: Interrupt the measurement
-    mp.interrupt_measurement(measurement)
+    mpClient.interrupt_measurement(measurement)
     print(f"Measurement Interrupted")
     print(f"Measurement Results: ", measurement.results)
 
