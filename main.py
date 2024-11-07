@@ -1,5 +1,5 @@
 import time
-from multiverse import MeasurementPlaneClient
+from MP_client import MeasurementPlaneClient
 
 def on_result_callback(result):
     print(f"New Result Received: {result}")
