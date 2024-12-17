@@ -17,7 +17,7 @@ class MeasurementPlaneClient:
         self.broker = Broker(self.broker_url)
         self.broker.start()
 
-    def get_capabilities(self, capability_type: str = None) -> dict:
+    def get_capabilities(self, capability_types: list = None) -> dict:
         capabilities_event = Event()
         capabilities = {}
 
@@ -25,9 +25,10 @@ class MeasurementPlaneClient:
             nonlocal capabilities
             try:
                 capabilities = json.loads(event.message.body)
-                keys_to_delete = [cp_id for cp_id in capabilities if capabilities[cp_id]['capability'] != capability_type]
-                for cp_id in keys_to_delete:
-                    del capabilities[cp_id]
+                if capability_types:
+                    keys_to_delete = [cp_id for cp_id in capabilities if capabilities[cp_id]['capability'] not in capability_types]
+                    for cp_id in keys_to_delete:
+                        del capabilities[cp_id]
             except KeyError as e:
                 logging.error(f"KeyError: {e}. Missing required keys in capability_body.")
             finally:

@@ -1,83 +1,30 @@
-import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output
-import plotly.graph_objs as go
-import time
-from threading import Thread
-import random
+from proton import Message
+from proton.handlers import MessagingHandler
+from proton.reactor import Container
 
-class DashPlotting:
-    def __init__(self, channels):
-        self.channels = channels
-        self.channel_data = {channel: [] for channel in channels}
-        self.timestamps = []
+class PersistentReceiver(MessagingHandler):
+    def __init__(self, broker_url, topic):
+        super().__init__()
+        self.broker_url = broker_url
+        self.topic = topic
 
-        # Initialize Dash app
-        self.app = dash.Dash(__name__)
+    def on_start(self, event):
+        # Establish connection and create receiver
+        print(f"Connecting to {self.broker_url}...")
+        connection = event.container.connect(self.broker_url)
+        event.container.create_receiver(connection, self.topic)
+        print(f"Listening for messages on topic: {self.topic}")
 
-        # Define the layout
-        self.app.layout = html.Div([
-            dcc.Graph(id='live-graph'),
-            dcc.Interval(
-                id='graph-update',
-                interval=1000,  # Update every second
-                n_intervals=0
-            )
-        ])
+    def on_message(self, event):
+        # Print the received message
+        print(f"Received message: {event.message.body}")
 
-        # Set up the callback to update the graph
-        @self.app.callback(
-            Output('live-graph', 'figure'),
-            [Input('graph-update', 'n_intervals')]
-        )
-        def update_graph_live(n):
-            fig = go.Figure()
+    def on_transport_error(self, event):
+        print(f"Transport error: {event.transport.condition.description}")
+        event.connection.close()
 
-            # Update the traces for each channel
-            for channel in self.channels:
-                fig.add_trace(go.Scatter(x=self.timestamps, y=self.channel_data[channel], mode='lines', name=f'Channel {channel}'))
-
-            fig.update_layout(
-                title="Real-Time Plotting",
-                xaxis_title="Time",
-                yaxis_title="Rate"
-            )
-
-            return fig
-
-    def start_server(self):
-        # Start the Dash app server
-        self.app.run_server(debug=True, use_reloader=False)  # Turn off reloader to avoid double execution
-
-    def on_result_callback(self, result):
-        print(f"New Result Received: {result}")
-        
-        if result:
-            result = result[0]  # Assuming result is a list of dicts
-
-            # Append new rates for each channel
-            for channel in self.channels:
-                self.channel_data[channel].append(result.get(channel, random.uniform(1, 10)))  # Append random value for example
-            
-            # Append the current timestamp
-            self.timestamps.append(time.time())
-
-# Example of usage
-channels = ['1', '2', '3']
-plotter = DashPlotting(channels)
-
-# Start the Dash server in the main thread
-plotter.start_server()
-
-# Simulate result callback with dummy data
-def simulate_data():
-    for _ in range(20):  # Simulate 20 result callbacks
-        result = [{'1': random.uniform(1, 10), '2': random.uniform(1, 10), '3': random.uniform(1, 10)}]
-        plotter.on_result_callback(result)
-        time.sleep(1)
-
-# Run data simulation in a separate thread
-data_thread = Thread(target=simulate_data)
-data_thread.start()
-
-
+# Create and run the receiver container
+if __name__ == "__main__":
+    broker_url = "amqp://localhost:5672"  # Update with your broker's address if needed
+    topic = "topic:///skopa"
+    Container(PersistentReceiver(broker_url, topic)).run()
